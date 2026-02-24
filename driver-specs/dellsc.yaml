@@ -1,0 +1,312 @@
+# Dell SC Series Driver Specification
+# For Sunbeam Cinder backend charm generation
+#
+# This spec defines BOTH the backend plugin (for CLI) AND the charm
+#
+# References:
+#   - https://docs.openstack.org/cinder/2025.1/configuration/block-storage/drivers/dell-storagecenter-driver.html
+
+vendor: dellsc
+display_name: Dell SC Series (Storage Center)
+description: |
+  Dell SC Series (Storage Center) integration for OpenStack Cinder.
+  Manages Dell Storage Center arrays via DSM Data Collector or direct
+  connection (SC OS 7.1.1+). Supports iSCSI and Fibre Channel protocols
+  with features including replication, Live Volume, and data reduction.
+
+# Supported storage protocols
+protocols:
+  - iscsi
+  - fc
+
+# High Availability support
+ha_enabled: true
+
+# Cinder driver class base path
+driver_class_base: cinder.volume.drivers.dell_emc.sc
+
+# Protocol-specific driver classes
+driver_classes:
+  iscsi: storagecenter_iscsi.SCISCSIDriver
+  fc: storagecenter_fc.SCFCDriver
+
+# Charm metadata
+charm:
+  name: cinder-volume-dellsc
+  summary: OpenStack volume service - Dell SC Series backend
+  base: ubuntu@24.04
+  subordinate: true
+  juju_requires: "3.3"
+
+# Relations required by the charm
+relations:
+  requires:
+    - name: cinder-volume
+      interface: cinder-volume
+      scope: container
+      limit: 1
+    - name: tracing
+      interface: tracing
+      optional: true
+      limit: 1
+
+# Vendor-specific configuration options
+# Fields:
+#   - cli_prompt: Show in CLI wizard (for backend.py)
+#   - secret_key: Key inside the Juju secret dict
+#   - validation: ip_network | ip_network_list | ip_address
+#   - enum_class: Name for generated StrEnum class
+config_options:
+  # Common options (provided by base class in charm)
+  - name: volume-backend-name
+    type: string
+    default: null
+    description: |
+      Name that Cinder will report for this backend. If unset the Juju
+      application name is used.
+    required: false
+    cli_prompt: false
+
+  - name: backend-availability-zone
+    type: string
+    default: null
+    description: |
+      Availability zone to associate with this backend.
+    required: false
+    cli_prompt: false
+
+  # Protocol selector
+  - name: protocol
+    type: string
+    default: iscsi
+    description: |
+      Dell SC protocol selector, determines driver class to use:
+      iscsi - SCISCSIDriver (iSCSI)
+      fc - SCFCDriver (Fibre Channel)
+    required: false
+    cli_prompt: true
+    enum:
+      - iscsi
+      - fc
+    enum_class: Protocol
+
+  # ── Required connection options ──
+
+  - name: san-ip
+    type: string
+    default: null
+    description: |
+      IP address of the Dell Storage Manager (DSM) Data Collector or the
+      Storage Center if connecting directly. Required for all operations.
+    required: true
+    cli_prompt: true
+    validation: ip_address
+
+  - name: san-login
+    type: string
+    default: admin
+    description: |
+      Username for the DSM or Storage Center login.
+    required: true
+    cli_prompt: true
+
+  - name: san-password
+    type: secret
+    default: null
+    description: |
+      Password for the DSM or Storage Center login.
+    required: true
+    cli_prompt: true
+    secret_key: password
+
+  - name: dell-sc-ssn
+    type: int
+    default: null
+    description: |
+      Storage Center System Serial Number. This uniquely identifies
+      the Dell SC array to manage.
+    required: true
+    cli_prompt: true
+
+  # ── Dell SC specific options ──
+
+  - name: dell-sc-api-port
+    type: int
+    default: 3033
+    description: |
+      Dell Storage Manager API port number.
+    required: false
+    cli_prompt: false
+
+  - name: dell-sc-server-folder
+    type: string
+    default: openstack
+    description: |
+      Name of the server folder to use on the Storage Center for
+      placing new server definitions.
+    required: false
+    cli_prompt: false
+
+  - name: dell-sc-volume-folder
+    type: string
+    default: openstack
+    description: |
+      Name of the volume folder to use on the Storage Center for
+      placing created volumes.
+    required: false
+    cli_prompt: false
+
+  - name: dell-sc-verify-cert
+    type: boolean
+    default: false
+    description: |
+      Enable HTTPS certificate verification when communicating with
+      the Storage Center.
+    required: false
+    cli_prompt: false
+
+  - name: dell-server-os
+    type: string
+    default: "Red Hat Linux 6.x"
+    description: |
+      Server OS type to use when creating a new server definition on
+      the Storage Center. The selected type does not have to match the
+      actual OS running on the compute node.
+    required: false
+    cli_prompt: false
+
+  - name: dell-api-async-rest-timeout
+    type: int
+    default: 15
+    description: |
+      Dell SC API timeout in seconds for asynchronous REST calls.
+    required: false
+    cli_prompt: false
+
+  - name: dell-api-sync-rest-timeout
+    type: int
+    default: 30
+    description: |
+      Dell SC API timeout in seconds for synchronous REST calls.
+    required: false
+    cli_prompt: false
+
+  # ── SAN / provisioning options ──
+
+  - name: san-thin-provision
+    type: boolean
+    default: true
+    description: |
+      Use thin provisioning for SAN volumes.
+    required: false
+    cli_prompt: false
+
+  - name: use-multipath-for-image-xfer
+    type: boolean
+    default: true
+    description: |
+      Enable multipathing for image transfer operations to improve
+      performance and reliability.
+    required: false
+    cli_prompt: false
+
+  # ── Dual DSM (secondary Data Collector) ──
+
+  - name: secondary-san-ip
+    type: string
+    default: null
+    description: |
+      IP address of a secondary DSM Data Collector for failover.
+      Both DSMs must manage the same set of Storage Centers.
+    required: false
+    cli_prompt: false
+    validation: ip_address
+
+  - name: secondary-san-login
+    type: string
+    default: Admin
+    description: |
+      Username for the secondary DSM Data Collector.
+    required: false
+    cli_prompt: false
+
+  - name: secondary-san-password
+    type: secret
+    default: null
+    description: |
+      Password for the secondary DSM Data Collector.
+    required: false
+    cli_prompt: false
+    secret_key: password
+
+  - name: secondary-sc-api-port
+    type: int
+    default: 3033
+    description: |
+      API port number for the secondary DSM Data Collector.
+    required: false
+    cli_prompt: false
+
+  # ── iSCSI-specific domain filtering ──
+
+  - name: excluded-domain-ips
+    type: string
+    default: null
+    description: |
+      Comma-separated list of iSCSI Fault Domain IP addresses to
+      exclude from connection targets. Ignored when included-domain-ips
+      is set.
+    required: false
+    cli_prompt: false
+    protocol_specific: iscsi
+
+  - name: included-domain-ips
+    type: string
+    default: null
+    description: |
+      Comma-separated list of iSCSI Fault Domain IP addresses to
+      include (whitelist) as connection targets. Takes precedence
+      over excluded-domain-ips.
+    required: false
+    cli_prompt: false
+    protocol_specific: iscsi
+
+# Feature flags for staged rollout
+feature_flags:
+  - name: enable_dual_dsm
+    default: false
+    description: Enable dual DSM failover support
+
+  - name: enable_replication
+    default: false
+    description: Enable replication features (requires DSM)
+
+# Build requirements
+build:
+  packages:
+    - git
+    - libffi-dev
+    - libssl-dev
+    - pkg-config
+    - rustc-1.80
+    - cargo-1.80
+  python_packages:
+    - cryptography
+    - jsonschema
+    - pydantic
+    - jinja2
+  snaps:
+    - astral-uv
+
+# Python dependencies for the charm
+dependencies:
+  - cryptography
+  - jinja2
+  - pydantic
+  - lightkube
+  - lightkube-models
+  - requests
+  - ops
+  - netifaces
+  - tenacity
+  - opentelemetry-api~=1.21.0
