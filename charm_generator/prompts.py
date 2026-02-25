@@ -569,33 +569,98 @@ if __name__ == "__main__":  # pragma: nocover
 - Inherit from `charm.OSCinderVolumeDriverOperatorCharm`
 - Override `_configuration_type_overrides()` for special types
 
-## TYPE OVERRIDE PATTERNS (Only override when NECESSARY)
+## BASE CLASS DEFAULTS (inherited via super()._configuration_type_overrides())
 
-**IMPORTANT**: Only add overrides for fields that need special pydantic validation.
-Do NOT override simple string, boolean, or int fields - the base class handles those.
+The base class `OSCinderVolumeDriverOperatorCharm` already provides these overrides.
+Your generated charm gets them for free by calling `super()._configuration_type_overrides()`.
+Do NOT re-declare these unless deliberately overriding with a stricter type:
 
-| Config Type | When to Override | Override Pattern |
-|-------------|------------------|-----------------|
-| Secret | Always (for Juju secret handling) | `typing.Annotated[str, pydantic.BeforeValidator(sunbeam_storage.secret_validator("{key}")), sunbeam_storage.Required]` |
-| Enum (vendor-prefixed, default null) | When option has vendor prefix and default is null | `EnumClassName \\| None` |
-| Enum (vendor-prefixed, has default) | When option has vendor prefix and a non-null default | `EnumClassName` (NO `\\| None`) |
-| IP Network (CIDR) | When single CIDR validation needed | `pydantic.IPvAnyNetwork \\| None` |
-| CIDR List | When comma-separated CIDR list | `CIDR_LIST_TYPING` |
-| Simple string enum (protocol) | Do NOT override | Handled by base class |
-| IP Address (san-ip) | Do NOT override | Handled by base class |
-
-**Reference Example** - Pure Storage only overrides:
 ```python
 {
-    "pure-api-token": ...,           # Secret
-    "pure-host-personality": ...,    # Vendor-prefixed enum
-    "pure-iscsi-cidr": ...,          # CIDR
-    "pure-iscsi-cidr-list": ...,     # CIDR list
-    "pure-nvme-cidr": ...,           # CIDR
-    "pure-nvme-cidr-list": ...,      # CIDR list
-    "pure-nvme-transport": ...,      # Vendor-prefixed enum
+    "driver-ssl-cert": typing.Annotated[str | None, pydantic.BeforeValidator(sunbeam_storage.certificate_validator)],
+    "san-ip": typing.Annotated[pydantic.IPvAnyAddress | str, sunbeam_storage.Required],
+    "volume-backend-name": str,
+    "backend-availability-zone": str,
+    "protocol": str,
 }
-# NOTE: "protocol" and "san-ip" are NOT overridden
+```
+
+## TYPE OVERRIDE PATTERNS
+
+Only add overrides for fields that need special pydantic validation beyond what
+the base class provides. The `type_overrides` section in the driver spec tells
+you exactly which overrides to generate.
+
+| Override Type | When to Use | Override Code Pattern |
+|---------------|-------------|----------------------|
+| Secret (required) | `type: secret` in type_overrides | `typing.Annotated[str, pydantic.BeforeValidator(sunbeam_storage.secret_validator("{key}")), sunbeam_storage.Required]` |
+| Secret (optional) | `type: secret` without required | `typing.Annotated[str, pydantic.BeforeValidator(sunbeam_storage.secret_validator("{key}"))]` |
+| Required field | `type: required` in type_overrides | `typing.Annotated[{python_type}, sunbeam_storage.Required]` |
+| Literal enum (required) | `type: literal` in type_overrides | `typing.Annotated[typing.Literal[{values}], sunbeam_storage.Required]` |
+| Force value | `type: force_value` in type_overrides | `typing.Literal[{value}]` |
+| Required group | `type: required_group` in type_overrides | `typing.Annotated[str \\| None, sunbeam_storage.RequiredIfGroup("{group}")]` |
+| Secret group | `type: secret_group` in type_overrides | `typing.Annotated[str, pydantic.BeforeValidator(sunbeam_storage.secret_validator("{key}")), sunbeam_storage.RequiredIfGroup("{group}")]` |
+| Enum (vendor-prefixed, default null) | `type: enum` in type_overrides | `EnumClassName \\| None` |
+| Enum (vendor-prefixed, has default) | `type: enum` in type_overrides | `EnumClassName` (NO `\\| None`) |
+| IP Network (CIDR) | `type: ip_network` in type_overrides | `pydantic.IPvAnyNetwork \\| None` |
+| CIDR List | `type: ip_network_list` in type_overrides | `CIDR_LIST_TYPING` |
+| Config removal | `remove_base_config` in spec | `overrides.pop("{name}", None)` |
+| Unsupported driver | `unsupported_driver: true` in spec | Add `enable-unsupported-driver` config + `typing.Literal[True]` override |
+
+**Reference Example 1** - Pure Storage (vendor-prefixed validation):
+```python
+overrides = super()._configuration_type_overrides()
+overrides.update({
+    "pure-api-token": typing.Annotated[
+        str,
+        pydantic.BeforeValidator(sunbeam_storage.secret_validator("token")),
+        sunbeam_storage.Required,
+    ],
+    "pure-host-personality": Personality | None,
+    "pure-iscsi-cidr": pydantic.IPvAnyNetwork | None,
+    "pure-iscsi-cidr-list": CIDR_LIST_TYPING,
+    "pure-nvme-cidr": pydantic.IPvAnyNetwork | None,
+    "pure-nvme-cidr-list": CIDR_LIST_TYPING,
+    "pure-nvme-transport": NvmeTransport,
+})
+return overrides
+```
+
+**Reference Example 2** - Dell SC (secrets, required fields, groups, config removal):
+```python
+overrides = super()._configuration_type_overrides()
+overrides.pop("driver-ssl-cert", None)
+overrides.update({
+    "san-login": typing.Annotated[
+        str,
+        pydantic.BeforeValidator(sunbeam_storage.secret_validator("san-login")),
+        sunbeam_storage.Required,
+    ],
+    "san-password": typing.Annotated[
+        str,
+        pydantic.BeforeValidator(sunbeam_storage.secret_validator("san-password")),
+        sunbeam_storage.Required,
+    ],
+    "dell-sc-ssn": typing.Annotated[int, sunbeam_storage.Required],
+    "protocol": typing.Annotated[
+        typing.Literal["fc", "iscsi"], sunbeam_storage.Required
+    ],
+    "enable-unsupported-driver": typing.Literal[True],
+    "secondary-san-ip": typing.Annotated[
+        str | None, sunbeam_storage.RequiredIfGroup("secondary")
+    ],
+    "secondary-san-login": typing.Annotated[
+        str,
+        pydantic.BeforeValidator(sunbeam_storage.secret_validator("secondary-san-login")),
+        sunbeam_storage.RequiredIfGroup("secondary"),
+    ],
+    "secondary-san-password": typing.Annotated[
+        str,
+        pydantic.BeforeValidator(sunbeam_storage.secret_validator("secondary-san-password")),
+        sunbeam_storage.RequiredIfGroup("secondary"),
+    ],
+})
+return overrides
 ```
 
 ## charmcraft.yaml Template
@@ -889,6 +954,7 @@ VENDOR_PASCAL_NAMES = {
     "dellemc": "DellEMC",
     "dell-emc": "DellEMC",
     "dell": "Dell",
+    "dellsc": "DellSC",
     "hpe": "HPE",
     "ibm": "IBM",
     "infinidat": "Infinidat",
@@ -906,6 +972,7 @@ VENDOR_SHORT_PREFIXES = {
     "dellemc": "dell",
     "dell-emc": "dell",
     "dell": "dell",
+    "dellsc": "dellsc",
     "hpe": "hpe",
     "ibm": "ibm",
     "infinidat": "infinidat",
@@ -961,63 +1028,151 @@ def get_vendor_short(vendor: str) -> str:
     return vendor_lower.split("-")[0]
 
 
-def detect_type_overrides(config_options: list[dict]) -> dict:
-    """Analyze config options and return required type overrides for charm.py.
-    
-    IMPORTANT: Only detect overrides for fields that need special handling:
-    - Secrets (always need override)
-    - Vendor-prefixed enums (e.g., pure-host-personality, hitachi-copy-method)
-    - CIDR/IP network fields (need pydantic.IPvAnyNetwork)
-    - CIDR list fields (need custom CIDR_LIST_TYPING)
-    
-    Do NOT override:
-    - Simple protocol enum (handled by base class)
-    - Simple IP address fields like san-ip (handled by base class)
+# Config options already handled by OSCinderVolumeDriverOperatorCharm base class.
+# The generated charm inherits these via super()._configuration_type_overrides()
+# and should NOT re-declare them unless deliberately overriding (e.g., stricter type).
+BASE_CLASS_OVERRIDES = {
+    "driver-ssl-cert",          # certificate_validator
+    "san-ip",                   # IPvAnyAddress | str, Required
+    "volume-backend-name",      # str
+    "backend-availability-zone",# str
+    "protocol",                 # str
+}
+
+
+def detect_type_overrides(config_options: list[dict], spec: dict | None = None) -> dict:
+    """Analyze spec and return required type overrides for charm.py.
+
+    If the spec contains a `type_overrides` section, uses that directly
+    (spec-driven mode). Otherwise falls back to heuristic detection from
+    config_options for backward compatibility.
+
+    Also processes top-level spec fields:
+    - `remove_base_config`: list of base class configs to pop() from overrides
+    - `unsupported_driver`: if true, adds enable-unsupported-driver with Literal[True]
     """
+    spec = spec or {}
+    type_overrides_spec = spec.get("type_overrides")
+
+    if type_overrides_spec is not None:
+        return _detect_from_type_overrides(config_options, spec, type_overrides_spec)
+    return _detect_from_config_options(config_options)
+
+
+def _detect_from_type_overrides(
+    config_options: list[dict],
+    spec: dict,
+    type_overrides_spec: list[dict],
+) -> dict:
+    """Spec-driven override detection using the type_overrides section."""
     overrides = {}
     enums = []
-    vendor_prefixes = ["pure", "hitachi", "netapp", "dell", "hpe", "ibm", "infinidat", "huawei", "solidfire", "nimble"]
-    
+
+    config_by_name = {opt["name"]: opt for opt in config_options}
+
+    for entry in type_overrides_spec:
+        name = entry["name"]
+        otype = entry["type"]
+        opt = config_by_name.get(name, {})
+
+        if otype == "secret":
+            overrides[name] = {
+                "type": "secret",
+                "secret_key": entry.get("secret_key", name),
+                "required": entry.get("required", opt.get("required", False)),
+            }
+
+        elif otype == "required":
+            overrides[name] = {
+                "type": "required",
+                "python_type": entry.get("python_type", "str"),
+            }
+
+        elif otype == "literal":
+            values = entry.get("values", opt.get("enum", []))
+            overrides[name] = {
+                "type": "literal",
+                "values": values,
+                "required": entry.get("required", False),
+            }
+
+        elif otype == "force_value":
+            overrides[name] = {
+                "type": "force_value",
+                "value": entry["value"],
+            }
+
+        elif otype == "required_group":
+            overrides[name] = {
+                "type": "required_group",
+                "group": entry["group"],
+            }
+
+        elif otype == "secret_group":
+            overrides[name] = {
+                "type": "secret_group",
+                "secret_key": entry.get("secret_key", name),
+                "group": entry["group"],
+            }
+
+        elif otype == "enum":
+            enum_class = entry.get("enum_class", opt.get("enum_class", ""))
+            enum_values = entry.get("values", opt.get("enum", []))
+            if enum_class and not any(e["name"] == enum_class for e in enums):
+                enums.append({"name": enum_class, "values": enum_values})
+            overrides[name] = {"type": "enum", "class": enum_class}
+
+        elif otype == "ip_network":
+            overrides[name] = {"type": "ip_network"}
+
+        elif otype == "ip_network_list":
+            overrides[name] = {"type": "ip_network_list"}
+
+    result = {"overrides": overrides, "enums": enums}
+
+    remove_base = spec.get("remove_base_config", [])
+    if remove_base:
+        result["remove_base_config"] = remove_base
+
+    if spec.get("unsupported_driver"):
+        result["unsupported_driver"] = True
+
+    return result
+
+
+def _detect_from_config_options(config_options: list[dict]) -> dict:
+    """Legacy heuristic detection from config_options (backward compatibility)."""
+    overrides = {}
+    enums = []
+    vendor_prefixes = [
+        "pure", "hitachi", "netapp", "dell", "hpe",
+        "ibm", "infinidat", "huawei", "solidfire", "nimble",
+    ]
+
     for opt in config_options:
         name = opt.get("name", "")
         opt_type = opt.get("type", "string")
-        
-        # Check if this is a vendor-prefixed field
+
         parts = name.split("-")
         has_vendor_prefix = len(parts) > 1 and parts[0] in vendor_prefixes
-        
-        # Secret fields - always need override
+
         if opt_type == "secret":
             overrides[name] = {
                 "type": "secret",
                 "secret_key": opt.get("secret_key", "token"),
                 "required": opt.get("required", False),
             }
-        
-        # Enum fields - only vendor-prefixed ones need override
         elif opt.get("enum") and has_vendor_prefix:
-            # Generate class name from option name (skip vendor prefix)
-            enum_parts = parts[1:]  # Skip vendor prefix
+            enum_parts = parts[1:]
             enum_class = opt.get("enum_class", "".join(w.capitalize() for w in enum_parts))
-            
             if not any(e["name"] == enum_class for e in enums):
-                enums.append({
-                    "name": enum_class,
-                    "values": opt["enum"],
-                })
-            
+                enums.append({"name": enum_class, "values": opt["enum"]})
             overrides[name] = {"type": "enum", "class": enum_class}
-        
-        # IP Network (CIDR) - only vendor-prefixed CIDR fields
         elif opt.get("validation") == "ip_network" and has_vendor_prefix:
             overrides[name] = {"type": "ip_network"}
-        
-        # CIDR List - only vendor-prefixed
         elif opt.get("validation") == "ip_network_list" and has_vendor_prefix:
             overrides[name] = {"type": "ip_network_list"}
-        
-        # Note: ip_address validation for non-prefixed fields (like san-ip) is NOT overridden
-    
+
     return {"overrides": overrides, "enums": enums}
 
 
@@ -1025,24 +1180,106 @@ def detect_type_overrides(config_options: list[dict]) -> dict:
 # Prompt Builder Functions
 # =============================================================================
 
+COMMON_CONFIG_OPTIONS = [
+    {
+        "name": "volume-backend-name",
+        "type": "string",
+        "default": None,
+        "description": "Name that Cinder will report for this backend. If unset the Juju application name is used.",
+        "required": False,
+        "cli_prompt": False,
+    },
+    {
+        "name": "backend-availability-zone",
+        "type": "string",
+        "default": None,
+        "description": "Availability zone to associate with this backend.",
+        "required": False,
+        "cli_prompt": False,
+    },
+    {
+        "name": "driver-ssl-cert",
+        "type": "string",
+        "default": None,
+        "description": "PEM-encoded SSL certificate for HTTPS connections to the storage array.",
+        "required": False,
+        "cli_prompt": False,
+    },
+    {
+        "name": "san-ip",
+        "type": "string",
+        "default": None,
+        "description": "Storage array management IP address or hostname.",
+        "required": True,
+        "cli_prompt": True,
+        "validation": "ip_address",
+    },
+]
+
+
+def _normalize_config_options(config_options: list[dict], spec: dict) -> list[dict]:
+    """Auto-inject common config options and apply field defaults."""
+    existing_names = {opt["name"] for opt in config_options}
+    remove_base = set(spec.get("remove_base_config", []))
+
+    merged = []
+    for common in COMMON_CONFIG_OPTIONS:
+        if common["name"] in existing_names:
+            continue
+        if common["name"] in remove_base:
+            continue
+        merged.append(common)
+    merged.extend(config_options)
+
+    for opt in merged:
+        opt.setdefault("type", "string")
+        opt.setdefault("default", None)
+        opt.setdefault("required", False)
+        opt.setdefault("cli_prompt", False)
+        opt.setdefault("description", "")
+
+    return merged
+
+
 def build_user_prompt(driver_spec: dict[str, Any]) -> str:
     """Build the user prompt from a driver specification."""
     vendor = driver_spec.get("vendor", "unknown")
     display_name = driver_spec.get("display_name", vendor)
     charm_info = driver_spec.get("charm", {})
     charm_name = charm_info.get("name", f"cinder-volume-{vendor.lower()}")
-    
+
     vendor_lower = vendor.lower().replace("_", "-")
     vendor_pascal = to_pascal_case(vendor)
     vendor_short = get_vendor_short(vendor)
-    
-    config_options = driver_spec.get("config_options", [])
-    override_info = detect_type_overrides(config_options)
-    
-    cli_fields = [opt for opt in config_options if opt.get("cli_prompt")]
+
+    config_options = _normalize_config_options(
+        driver_spec.get("config_options", []), driver_spec
+    )
+    override_info = detect_type_overrides(config_options, spec=driver_spec)
+
     secrets = [opt for opt in config_options if opt.get("type") == "secret"]
     enums = [opt for opt in config_options if opt.get("enum")]
-    
+
+    # Build extra override instructions
+    extra_override_notes = []
+    remove_base = override_info.get("remove_base_config", [])
+    if remove_base:
+        items = ", ".join(f'`"{c}"`' for c in remove_base)
+        extra_override_notes.append(
+            f"- REMOVE base class configs by calling `overrides.pop(name, None)` "
+            f"for: {items}"
+        )
+    if override_info.get("unsupported_driver"):
+        extra_override_notes.append(
+            "- This driver is UNSUPPORTED: add `enable-unsupported-driver` as a "
+            "boolean config option (default: true) in charmcraft.yaml AND add "
+            "`typing.Literal[True]` override for it in charm.py"
+        )
+
+    extra_notes_block = ""
+    if extra_override_notes:
+        extra_notes_block = "\n## SPECIAL OVERRIDE INSTRUCTIONS:\n" + "\n".join(extra_override_notes) + "\n"
+
     prompt = f"""Generate a Sunbeam Cinder backend for **{display_name}**.
 
 ## EXACT Naming (use these values):
@@ -1078,7 +1315,7 @@ Convert hyphenated names to snake_case: `pure-api-token` → `pure_api_token`
 
 ## Secret Fields (use SecretDictField in backend.py, secret_validator in charm.py)
 ```json
-{json.dumps([{"name": s["name"], "python_name": s["name"].replace("-", "_"), "secret_key": s.get("secret_key", "token")} for s in secrets], indent=2) if secrets else "[]"}
+{json.dumps([{"name": s["name"], "python_name": s["name"].replace("-", "_"), "secret_key": s.get("secret_key", s["name"])} for s in secrets], indent=2) if secrets else "[]"}
 ```
 
 ## Enum Fields (create StrEnum classes in BOTH backend.py and charm.py)
@@ -1086,11 +1323,13 @@ Convert hyphenated names to snake_case: `pure-api-token` → `pure_api_token`
 {json.dumps([{"name": e["name"], "python_name": e["name"].replace("-", "_"), "values": e["enum"], "enum_class": e.get("enum_class")} for e in enums], indent=2) if enums else "[]"}
 ```
 
-## Type Overrides for charm.py _configuration_type_overrides() (vendor-prefixed only)
+## Type Overrides for charm.py _configuration_type_overrides()
+These are the EXACT overrides your charm must add on top of super()._configuration_type_overrides().
+Follow the TYPE OVERRIDE PATTERNS table in the system prompt for each entry type.
 ```json
 {json.dumps(override_info, indent=2)}
 ```
-
+{extra_notes_block}
 ## IMPORTANT REMINDERS:
 1. backend.py Config class must have ALL fields from the spec above EXCEPT `volume-backend-name` and `backend-availability-zone` (inherited from base class)
 2. Use snake_case for Python attribute names (e.g., `pure_api_token` not `api_token`)
@@ -1098,6 +1337,8 @@ Convert hyphenated names to snake_case: `pure-api-token` → `pure_api_token`
 4. Create StrEnum classes for vendor-prefixed enum fields (e.g., Personality, NvmeTransport). Use `Literal[...] | None` for simple enums like protocol
 5. In charmcraft.yaml: secret fields MUST use `type: secret` (NOT `type: string`); required fields must NOT have `default: null`
 6. The test file must include secret handling, relation setup, config updates, and assertions (see template)
+7. charm.py MUST call `super()._configuration_type_overrides()` first, then update with vendor-specific overrides
+8. Use the secret_key from the type_overrides as the key passed to `secret_validator()` (e.g., `secret_validator("san-password")`)
 
 Generate ALL files as a JSON object.
 """

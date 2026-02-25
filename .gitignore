@@ -1,0 +1,4 @@
+.env
+charm_generator/__pycache__/
+venv/
+

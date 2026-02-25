@@ -239,6 +239,135 @@ class TestSpecBasedValidation:
         assert len(base_warnings) == 2
 
 
+class TestTypeOverrideValidation:
+    """Tests for spec-driven type override validation in charm.py."""
+
+    @pytest.fixture
+    def spec_with_overrides(self):
+        return {
+            "vendor": "test",
+            "display_name": "Test Storage",
+            "charm": {"name": "cinder-volume-test"},
+            "unsupported_driver": True,
+            "remove_base_config": ["driver-ssl-cert"],
+            "type_overrides": [
+                {"name": "san-login", "type": "secret", "secret_key": "san-login", "required": True},
+                {"name": "dell-sc-ssn", "type": "required", "python_type": "int"},
+                {"name": "protocol", "type": "literal", "values": ["fc", "iscsi"], "required": True},
+                {"name": "secondary-san-ip", "type": "required_group", "group": "secondary"},
+            ],
+            "config_options": [
+                {"name": "san-ip", "type": "string", "required": True},
+                {"name": "san-login", "type": "secret", "required": True, "secret_key": "san-login"},
+                {"name": "dell-sc-ssn", "type": "int", "required": True},
+                {"name": "protocol", "type": "string", "enum": ["fc", "iscsi"]},
+                {"name": "secondary-san-ip", "type": "string"},
+            ],
+        }
+
+    def test_all_overrides_present(self, validator, tmp_charm_dir, spec_with_overrides):
+        (tmp_charm_dir / "src" / "charm.py").write_text(textwrap.dedent("""\
+            import typing
+            import ops_sunbeam.charm as charm
+            import ops_sunbeam.storage as sunbeam_storage
+            import ops_sunbeam.tracing as sunbeam_tracing
+            import pydantic
+
+            @sunbeam_tracing.trace_sunbeam_charm
+            class CinderVolumeTestOperatorCharm(charm.OSCinderVolumeDriverOperatorCharm):
+                def _configuration_type_overrides(self):
+                    overrides = super()._configuration_type_overrides()
+                    overrides.pop("driver-ssl-cert", None)
+                    overrides.update({
+                        "san-login": typing.Annotated[
+                            str,
+                            pydantic.BeforeValidator(sunbeam_storage.secret_validator("san-login")),
+                            sunbeam_storage.Required,
+                        ],
+                        "dell-sc-ssn": typing.Annotated[int, sunbeam_storage.Required],
+                        "protocol": typing.Annotated[
+                            typing.Literal["fc", "iscsi"], sunbeam_storage.Required
+                        ],
+                        "enable-unsupported-driver": typing.Literal[True],
+                        "secondary-san-ip": typing.Annotated[
+                            str | None, sunbeam_storage.RequiredIfGroup("secondary")
+                        ],
+                    })
+                    return overrides
+        """))
+
+        charmcraft = yaml.safe_load((tmp_charm_dir / "charmcraft.yaml").read_text())
+        charmcraft["config"]["options"] = {
+            "volume-backend-name": {"type": "string", "default": None},
+            "backend-availability-zone": {"type": "string", "default": None},
+            "san-ip": {"type": "string"},
+            "san-login": {"type": "secret"},
+            "dell-sc-ssn": {"type": "int"},
+            "protocol": {"type": "string", "default": "fc"},
+            "secondary-san-ip": {"type": "string", "default": None},
+            "enable-unsupported-driver": {"type": "boolean", "default": True},
+        }
+        (tmp_charm_dir / "charmcraft.yaml").write_text(yaml.dump(charmcraft))
+
+        spec_file = tmp_charm_dir.parent / "spec.yaml"
+        spec_file.write_text(yaml.dump(spec_with_overrides))
+
+        result = validator.validate(tmp_charm_dir.name, spec_path=str(spec_file))
+        override_errors = [
+            i for i in result.issues
+            if i.category == "spec" and i.severity == "error"
+        ]
+        assert len(override_errors) == 0, f"Unexpected errors: {[i.message for i in override_errors]}"
+
+    def test_missing_unsupported_driver(self, validator, tmp_charm_dir, spec_with_overrides):
+        (tmp_charm_dir / "src" / "charm.py").write_text(textwrap.dedent("""\
+            import typing
+            import ops_sunbeam.charm as charm
+            import ops_sunbeam.storage as sunbeam_storage
+            import ops_sunbeam.tracing as sunbeam_tracing
+            import pydantic
+
+            @sunbeam_tracing.trace_sunbeam_charm
+            class CinderVolumeTestOperatorCharm(charm.OSCinderVolumeDriverOperatorCharm):
+                def _configuration_type_overrides(self):
+                    overrides = super()._configuration_type_overrides()
+                    overrides.update({
+                        "san-login": typing.Annotated[
+                            str,
+                            pydantic.BeforeValidator(sunbeam_storage.secret_validator("san-login")),
+                            sunbeam_storage.Required,
+                        ],
+                        "dell-sc-ssn": typing.Annotated[int, sunbeam_storage.Required],
+                        "protocol": typing.Annotated[
+                            typing.Literal["fc", "iscsi"], sunbeam_storage.Required
+                        ],
+                        "secondary-san-ip": typing.Annotated[
+                            str | None, sunbeam_storage.RequiredIfGroup("secondary")
+                        ],
+                    })
+                    return overrides
+        """))
+
+        charmcraft = yaml.safe_load((tmp_charm_dir / "charmcraft.yaml").read_text())
+        charmcraft["config"]["options"] = {
+            "volume-backend-name": {"type": "string", "default": None},
+            "backend-availability-zone": {"type": "string", "default": None},
+            "san-ip": {"type": "string"},
+            "san-login": {"type": "secret"},
+            "dell-sc-ssn": {"type": "int"},
+            "protocol": {"type": "string", "default": "fc"},
+            "secondary-san-ip": {"type": "string", "default": None},
+        }
+        (tmp_charm_dir / "charmcraft.yaml").write_text(yaml.dump(charmcraft))
+
+        spec_file = tmp_charm_dir.parent / "spec.yaml"
+        spec_file.write_text(yaml.dump(spec_with_overrides))
+
+        result = validator.validate(tmp_charm_dir.name, spec_path=str(spec_file))
+        unsupported_errors = [i for i in result.issues if "enable-unsupported-driver" in i.message]
+        assert len(unsupported_errors) >= 1
+
+
 class TestCompareCharms:
     def test_compare_nonexistent(self):
         result = compare_charms("nonexistent1", "nonexistent2")

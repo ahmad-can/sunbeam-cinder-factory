@@ -1,8 +1,3 @@
-# Pure Storage FlashArray Driver Specification
-# Reference implementation for Sunbeam Cinder backend charm generation
-#
-# This spec defines BOTH the backend plugin (for CLI) AND the charm
-
 vendor: purestorage
 display_name: Pure Storage FlashArray
 description: |
@@ -10,347 +5,132 @@ description: |
   Provides high-performance all-flash storage with enterprise features
   including data reduction, replication, and snapshots.
 
-# Supported storage protocols
-protocols:
-  - iscsi
-  - fc
-  - nvme
-
-# High Availability support
 ha_enabled: true
 
-# Cinder driver class base path
-driver_class_base: cinder.volume.drivers.pure
-
-# Protocol-specific driver classes
-driver_classes:
-  iscsi: PureISCSIDriver
-  fc: PureFCDriver
-  nvme: PureNVMEDriver
-
-# Charm metadata
 charm:
   name: cinder-volume-purestorage
   summary: OpenStack volume service - Pure Storage backend
-  base: ubuntu@24.04
-  subordinate: true
-  juju_requires: "3.3"
 
-# Relations required by the charm
-relations:
-  requires:
-    - name: cinder-volume
-      interface: cinder-volume
-      scope: container
-      limit: 1
-    - name: tracing
-      interface: tracing
-      optional: true
-      limit: 1
+type_overrides:
+  - name: pure-api-token
+    type: secret
+    secret_key: token
+    required: true
 
-# Vendor-specific configuration options
-# New fields:
-#   - cli_prompt: Show in CLI wizard (for backend.py)
-#   - secret_key: Key inside the Juju secret dict
-#   - validation: ip_network | ip_network_list | ip_address
-#   - enum_class: Name for generated StrEnum class
+  - name: pure-host-personality
+    type: enum
+    enum_class: Personality
+
+  - name: pure-nvme-transport
+    type: enum
+    enum_class: NvmeTransport
+
+  - name: pure-iscsi-cidr
+    type: ip_network
+
+  - name: pure-iscsi-cidr-list
+    type: ip_network_list
+
+  - name: pure-nvme-cidr
+    type: ip_network
+
+  - name: pure-nvme-cidr-list
+    type: ip_network_list
+
 config_options:
-  # Common options (no special validation)
-  - name: volume-backend-name
-    type: string
-    default: null
-    description: |
-      Name that Cinder will report for this backend. If unset the Juju
-      application name is used.
-    required: false
-    cli_prompt: false
-
-  - name: backend-availability-zone
-    type: string
-    default: null
-    description: |
-      Availability zone to associate with this backend.
-    required: false
-    cli_prompt: false
-
-  - name: driver-ssl-cert
-    type: string
-    default: null
-    description: |
-      PEM-encoded SSL certificate to use for HTTPS connections to the
-      storage array. If unset, SSL verification is not performed.
-    required: false
-    cli_prompt: false
-
   - name: protocol
-    type: string
     default: iscsi
     description: |
       Pure Storage protocol selector, determines driver class to use:
-      iscsi - cinder.volume.drivers.pure.PureISCSIDriver (iSCSI)
-      fc - cinder.volume.drivers.pure.PureFCDriver (Fibre Channel)
-      nvme - cinder.volume.drivers.pure.PureNVMEDriver (NVMe)
-    required: false
+      iscsi - PureISCSIDriver, fc - PureFCDriver, nvme - PureNVMEDriver
     cli_prompt: true
-    enum:
-      - iscsi
-      - fc
-      - nvme
+    enum: [iscsi, fc, nvme]
     enum_class: Protocol
 
   - name: use-multipath-for-image-xfer
     type: boolean
     default: true
-    description: |
-      Enable multipathing for image transfer operations to improve
-      performance and reliability.
-    required: false
-    cli_prompt: false
-
-  # Connection options - REQUIRED, shown in CLI
-  - name: san-ip
-    type: string
-    default: null
-    description: |
-      Pure Storage FlashArray management IP address or hostname.
-      This is the primary array management interface.
-    required: true
-    cli_prompt: true
-    validation: ip_address
+    description: Enable multipathing for image transfer operations.
 
   - name: pure-api-token
     type: secret
-    default: null
-    description: |
-      REST API authorization token from the Pure Storage FlashArray.
-      Required for all driver operations. Obtain from Purity system
-      using: pureadmin create --api-token <username>
+    description: REST API authorization token from the FlashArray.
     required: true
     cli_prompt: true
     secret_key: token
 
-  # Array behavior options
   - name: pure-automatic-max-oversubscription-ratio
     type: boolean
     default: true
-    description: |
-      Automatically determine an oversubscription ratio based on the
-      current total data reduction values. If enabled, this calculated
-      value will override the max_over_subscription_ratio config option.
-    required: false
-    cli_prompt: false
+    description: Automatically determine oversubscription ratio from data reduction values.
 
   - name: pure-eradicate-on-delete
     type: boolean
     default: false
-    description: |
-      When enabled, all Pure volumes, snapshots, and protection groups
-      will be eradicated at the time of deletion in Cinder. Data will
-      NOT be recoverable after a delete with this set to True!
-      When disabled, volumes and snapshots will go into pending
-      eradication state and can be recovered for 24 hours.
-    required: false
-    cli_prompt: false
+    description: "Immediately eradicate volumes on delete (WARNING: not recoverable)."
 
   - name: pure-host-personality
-    type: string
-    default: null
-    description: |
-      Determines how the Purity system tunes the protocol used between
-      the array and the initiator. Options: aix, esxi, hitachi-vsp,
-      hpux, oracle-vm-server, solaris, vms, or null for auto-detection.
-    required: false
-    cli_prompt: false
-    enum:
-      - aix
-      - esxi
-      - hitachi-vsp
-      - hpux
-      - oracle-vm-server
-      - solaris
-      - vms
+    description: Host personality for protocol tuning (aix, esxi, hitachi-vsp, hpux, oracle-vm-server, solaris, vms).
+    enum: [aix, esxi, hitachi-vsp, hpux, oracle-vm-server, solaris, vms]
     enum_class: Personality
 
-  # iSCSI-specific options
   - name: pure-iscsi-cidr
-    type: string
     default: "0.0.0.0/0"
-    description: |
-      CIDR of FlashArray iSCSI targets hosts are allowed to connect to.
-      Default allows connection to any IPv4 address. Supports IPv6 subnets.
-      Ignored when pure-iscsi-cidr-list is set.
-    required: false
-    cli_prompt: false
-    protocol_specific: iscsi
+    description: CIDR of FlashArray iSCSI targets hosts can connect to.
     validation: ip_network
 
   - name: pure-iscsi-cidr-list
-    type: string
-    default: null
-    description: |
-      Comma-separated list of CIDR of FlashArray iSCSI targets hosts
-      are allowed to connect to. Supports IPv4 and IPv6 subnets.
-      This parameter supersedes pure-iscsi-cidr.
-    required: false
-    cli_prompt: false
-    protocol_specific: iscsi
+    description: Comma-separated CIDRs for iSCSI targets. Supersedes pure-iscsi-cidr.
     validation: ip_network_list
 
-  # NVMe-specific options
   - name: pure-nvme-cidr
-    type: string
     default: "0.0.0.0/0"
-    description: |
-      CIDR of FlashArray NVMe targets hosts are allowed to connect to.
-      Default allows connection to any IPv4 address. Supports IPv6 subnets.
-      Ignored when pure-nvme-cidr-list is set.
-    required: false
-    cli_prompt: false
-    protocol_specific: nvme
+    description: CIDR of FlashArray NVMe targets hosts can connect to.
     validation: ip_network
 
   - name: pure-nvme-cidr-list
-    type: string
-    default: null
-    description: |
-      Comma-separated list of CIDR of FlashArray NVMe targets hosts
-      are allowed to connect to. Supports IPv4 and IPv6 subnets.
-      This parameter supersedes pure-nvme-cidr.
-    required: false
-    cli_prompt: false
-    protocol_specific: nvme
+    description: Comma-separated CIDRs for NVMe targets. Supersedes pure-nvme-cidr.
     validation: ip_network_list
 
   - name: pure-nvme-transport
-    type: string
     default: tcp
-    description: |
-      NVMe transport layer to be used by the NVMe driver.
-      Options: roce, tcp
-      Note: TCP transport requires Purity 6.4.2 or higher.
-    required: false
-    cli_prompt: false
-    protocol_specific: nvme
-    enum:
-      - tcp
-      # - roce  # Not supported yet
+    description: NVMe transport layer (tcp). Requires Purity 6.4.2+.
+    enum: [tcp]
     enum_class: NvmeTransport
 
-  # Replication options
   - name: pure-replica-interval-default
     type: int
     default: 3600
-    description: |
-      Snapshot replication interval in seconds. Default is 1 hour (3600).
-    required: false
-    cli_prompt: false
+    description: Snapshot replication interval in seconds.
 
   - name: pure-replica-retention-long-term-default
     type: int
     default: 7
-    description: |
-      Retain snapshots per day on target for this time (in days).
-      Default is 7 days.
-    required: false
-    cli_prompt: false
+    description: Retain snapshots per day on target for this many days.
 
   - name: pure-replica-retention-long-term-per-day-default
     type: int
     default: 3
-    description: |
-      Retain how many snapshots for each day. Default is 3 snapshots per day.
-    required: false
-    cli_prompt: false
+    description: Number of snapshots to retain per day.
 
   - name: pure-replica-retention-short-term-default
     type: int
     default: 14400
-    description: |
-      Retain all snapshots on target for this time (in seconds).
-      Default is 4 hours (14400).
-    required: false
-    cli_prompt: false
+    description: Retain all snapshots on target for this time (seconds).
 
   - name: pure-replication-pg-name
-    type: string
     default: cinder-group
-    description: |
-      Pure Protection Group name to use for async replication.
-      Will be created if it does not exist.
-      WARNING: Do not change after volumes have been created.
-    required: false
-    cli_prompt: false
+    description: Protection Group name for async replication.
 
   - name: pure-replication-pod-name
-    type: string
     default: cinder-pod
-    description: |
-      Pure Pod name to use for sync replication.
-      Will be created if it does not exist.
-      WARNING: Do not change after volumes have been created.
-    required: false
-    cli_prompt: false
+    description: Pod name for sync replication.
 
   - name: pure-trisync-enabled
     type: boolean
     default: false
-    description: |
-      When enabled and two replication devices are provided (one each
-      of types sync and async), this enables the ability to create a
-      volume that is sync replicated to one array and async replicated
-      to a separate array (3-site replication).
-    required: false
-    cli_prompt: false
+    description: Enable 3-site replication (sync + async).
 
   - name: pure-trisync-pg-name
-    type: string
     default: cinder-trisync
-    description: |
-      Pure Protection Group name to use for trisync replication leg
-      inside the sync replication pod. Will be created if it does not exist.
-    required: false
-    cli_prompt: false
-
-# Feature flags for staged rollout
-feature_flags:
-  - name: enable_replication
-    default: true
-    description: Enable replication features
-
-  - name: enable_trisync
-    default: false
-    description: Enable tri-sync replication (3-site)
-
-  - name: enable_nvme_tcp
-    default: true
-    description: Enable NVMe over TCP transport
-
-# Build requirements
-build:
-  packages:
-    - git
-    - libffi-dev
-    - libssl-dev
-    - pkg-config
-    - rustc-1.80
-    - cargo-1.80
-  python_packages:
-    - cryptography
-    - jsonschema
-    - pydantic
-    - jinja2
-  snaps:
-    - astral-uv
-
-# Python dependencies for the charm
-dependencies:
-  - cryptography
-  - jinja2
-  - pydantic
-  - lightkube
-  - lightkube-models
-  - requests
-  - ops
-  - netifaces
-  - tenacity
-  - opentelemetry-api~=1.21.0
+    description: Protection Group name for trisync replication.

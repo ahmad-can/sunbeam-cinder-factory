@@ -1,0 +1,96 @@
+# Driver Spec Template
+#
+# Copy this file, rename to <vendor>.yaml, fill in your details.
+# See pure.yaml and dellsc.yaml for real-world examples.
+#
+# Auto-injected config_options (you don't need to add these):
+#   volume-backend-name, backend-availability-zone, san-ip, driver-ssl-cert
+#
+# Field defaults (omit when value matches):
+#   type: string | default: null | required: false | cli_prompt: false | description: ""
+
+# --- Required ---
+
+vendor: myvendor                           # lowercase identifier
+display_name: My Vendor Storage Array      # human-readable name
+description: |                             # backend description
+  My Vendor storage integration for OpenStack Cinder.
+
+ha_enabled: true                           # supports Juju HA
+
+charm:
+  name: cinder-volume-myvendor             # charm name
+  summary: OpenStack volume service - My Vendor backend
+
+# --- Optional flags ---
+
+# unsupported_driver: true                 # adds enable-unsupported-driver config + Literal[True] override
+# remove_base_config:                      # base class configs to pop() from overrides
+#   - driver-ssl-cert
+
+# --- type_overrides ---
+#
+# Declares pydantic overrides for charm.py _configuration_type_overrides().
+# Base class already handles: san-ip, driver-ssl-cert, protocol, volume-backend-name,
+# backend-availability-zone. Only add fields needing STRICTER validation.
+#
+# Types:
+#   secret         -> secret_validator("key") + Required
+#   required       -> Annotated[python_type, Required]
+#   literal        -> Annotated[Literal[values], Required]
+#   force_value    -> Literal[value]
+#   required_group -> Annotated[str | None, RequiredIfGroup("group")]
+#   secret_group   -> secret_validator("key") + RequiredIfGroup("group")
+#   enum           -> StrEnum class | None
+#   ip_network     -> IPvAnyNetwork | None
+#   ip_network_list -> CIDR_LIST_TYPING
+
+type_overrides: []
+  # - name: myvendor-api-token
+  #   type: secret
+  #   secret_key: token
+  #   required: true
+  #
+  # - name: myvendor-array-id
+  #   type: required
+  #   python_type: int
+  #
+  # - name: protocol
+  #   type: literal
+  #   values: [iscsi, fc]
+  #   required: true
+  #
+  # - name: secondary-san-ip
+  #   type: required_group
+  #   group: secondary
+
+# --- config_options ---
+#
+# Every entry becomes a config option in charmcraft.yaml and a field in backend.py.
+# charm.py does NOT list these -- it reads them from charmcraft.yaml at runtime.
+# Only fields in type_overrides get special handling in charm.py.
+#
+# Optional fields per entry:
+#   secret_key        for type: secret -- key inside the Juju secret dict
+#   enum              list of allowed values
+#   enum_class        PascalCase class name for StrEnum generation
+#   validation        ip_address | ip_network | ip_network_list
+#   protocol_specific only relevant for a specific protocol (iscsi, fc, nvme)
+
+config_options:
+  - name: protocol
+    default: iscsi
+    description: Protocol selector.
+    cli_prompt: true
+    enum: [iscsi, fc]
+    enum_class: Protocol
+
+  # - name: myvendor-api-token
+  #   type: secret
+  #   description: REST API authorization token.
+  #   required: true
+  #   cli_prompt: true
+  #   secret_key: token
+
+  # - name: myvendor-pool-name
+  #   description: Storage pool for volume creation.

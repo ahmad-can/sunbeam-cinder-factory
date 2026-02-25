@@ -14,7 +14,7 @@ from charm_generator.settings import (
     DRIVER_SPECS_DIR,
     REQUIRED_CHARM_FILES,
 )
-from charm_generator.prompts import detect_type_overrides, to_pascal_case
+from charm_generator.prompts import detect_type_overrides, to_pascal_case, _normalize_config_options
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,14 @@ class CharmValidator:
     
     def _validate_against_spec(self, vendor_dir: Path, spec: dict, result: ValidationResult) -> None:
         """Validate generated files against the YAML spec."""
+        spec = dict(spec)
+        user_option_names = {opt["name"] for opt in spec.get("config_options", [])}
+        spec["config_options"] = _normalize_config_options(
+            spec.get("config_options", []), spec
+        )
+        spec["_auto_injected"] = {
+            opt["name"] for opt in spec["config_options"]
+        } - user_option_names
         self._validate_config_options_in_charmcraft(vendor_dir, spec, result)
         self._validate_type_overrides_in_charm(vendor_dir, spec, result)
         self._validate_cli_fields_in_backend(vendor_dir, spec, result)
@@ -190,13 +198,20 @@ class CharmValidator:
         spec_options = {opt["name"] for opt in spec.get("config_options", [])}
         spec_options_by_name = {opt["name"]: opt for opt in spec.get("config_options", [])}
         
-        # Check for missing options
+        auto_injected = spec.get("_auto_injected", set())
+
         missing = spec_options - generated_option_names
         for opt in missing:
-            result.add_issue("error", "spec", f"Config option missing from charmcraft.yaml: {opt}", file_path="charmcraft.yaml")
+            if opt in auto_injected:
+                result.add_issue("warning", "spec", f"Auto-injected config option missing from charmcraft.yaml: {opt}", file_path="charmcraft.yaml")
+            else:
+                result.add_issue("error", "spec", f"Config option missing from charmcraft.yaml: {opt}", file_path="charmcraft.yaml")
         
-        # Check for extra options (warning only)
-        extra = generated_option_names - spec_options - {"volume-backend-name", "backend-availability-zone"}
+        expected_extras = {"volume-backend-name", "backend-availability-zone"}
+        if spec.get("unsupported_driver"):
+            expected_extras.add("enable-unsupported-driver")
+
+        extra = generated_option_names - spec_options - expected_extras
         for opt in extra:
             result.add_issue("info", "spec", f"Extra config option in charmcraft.yaml: {opt}", file_path="charmcraft.yaml")
         
@@ -229,25 +244,73 @@ class CharmValidator:
         path = vendor_dir / "src" / "charm.py"
         if not path.exists():
             return
-        
+
         content = path.read_text()
         config_options = spec.get("config_options", [])
-        override_info = detect_type_overrides(config_options)
-        
+        override_info = detect_type_overrides(config_options, spec=spec)
+
         for opt_name, info in override_info["overrides"].items():
-            # Check if the option name appears in _configuration_type_overrides
             if f'"{opt_name}"' not in content:
-                result.add_issue("error", "spec", f"Type override missing in charm.py: {opt_name}", file_path="src/charm.py")
-            else:
-                # Verify correct override type
-                if info["type"] == "secret" and "secret_validator" not in content:
-                    result.add_issue("error", "spec", f"Secret validator missing for: {opt_name}", file_path="src/charm.py")
-        
+                result.add_issue(
+                    "error", "spec",
+                    f"Type override missing in charm.py: {opt_name}",
+                    file_path="src/charm.py",
+                )
+                continue
+
+            otype = info["type"]
+            if otype in ("secret", "secret_group") and "secret_validator" not in content:
+                result.add_issue(
+                    "error", "spec",
+                    f"Secret validator missing for: {opt_name}",
+                    file_path="src/charm.py",
+                )
+            if otype == "required" and "sunbeam_storage.Required" not in content:
+                result.add_issue(
+                    "error", "spec",
+                    f"sunbeam_storage.Required missing for required field: {opt_name}",
+                    file_path="src/charm.py",
+                )
+            if otype == "literal" and "typing.Literal" not in content:
+                result.add_issue(
+                    "error", "spec",
+                    f"typing.Literal missing for: {opt_name}",
+                    file_path="src/charm.py",
+                )
+            if otype in ("required_group", "secret_group") and "RequiredIfGroup" not in content:
+                result.add_issue(
+                    "error", "spec",
+                    f"RequiredIfGroup missing for group field: {opt_name}",
+                    file_path="src/charm.py",
+                )
+
         # Check enum classes are defined
         for enum_info in override_info["enums"]:
             enum_name = enum_info["name"]
             if f"class {enum_name}(StrEnum)" not in content:
-                result.add_issue("error", "spec", f"StrEnum class missing: {enum_name}", file_path="src/charm.py")
+                result.add_issue(
+                    "error", "spec",
+                    f"StrEnum class missing: {enum_name}",
+                    file_path="src/charm.py",
+                )
+
+        # Check remove_base_config entries produce overrides.pop() calls
+        for name in override_info.get("remove_base_config", []):
+            if f'"{name}"' not in content:
+                result.add_issue(
+                    "warning", "spec",
+                    f"Base class config '{name}' should be removed via overrides.pop()",
+                    file_path="src/charm.py",
+                )
+
+        # Check unsupported_driver adds enable-unsupported-driver
+        if override_info.get("unsupported_driver"):
+            if '"enable-unsupported-driver"' not in content:
+                result.add_issue(
+                    "error", "spec",
+                    "Missing enable-unsupported-driver override for unsupported driver",
+                    file_path="src/charm.py",
+                )
     
     def _validate_cli_fields_in_backend(self, vendor_dir: Path, spec: dict, result: ValidationResult) -> None:
         """Verify CLI-prompted fields are in backend.py."""
